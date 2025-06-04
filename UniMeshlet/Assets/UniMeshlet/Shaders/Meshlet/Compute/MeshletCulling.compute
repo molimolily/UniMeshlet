@@ -1,0 +1,259 @@
+#pragma kernel CSCullCluster
+#pragma kernel CSPrepareCluster
+#pragma kernel CSCullMeshlet
+#pragma use_dxc
+#pragma multi_compile _ UNITY_DEVICE_SUPPORTS_WAVE_ANY
+#pragma multi_compile_local _ ENABLE_HIERARCHY_CULLING
+
+#define CULLING_THREADS 64
+
+struct ClusterNode
+{
+    float3 center;
+    float radius;
+    uint firstIndex;
+    uint count;
+};
+
+struct Meshlet
+{
+    uint vertexOffset;
+    uint triangleOffset;
+    uint vertexCount;
+    uint triangleCount;
+};
+
+struct MeshletBound
+{
+    float3 center;
+    float radius;
+
+    float3 coneApex;
+    float3 coneAxis;
+    float coneCutoff;
+
+    uint padding;
+};
+
+struct VisibleInfo
+{
+    uint meshletID;
+    uint baseIndex;
+    uint triangleCount;
+    uint padding;
+};
+
+StructuredBuffer<ClusterNode> _ClusterNodes; // *
+RWStructuredBuffer<uint> _DepthCounter; // *
+AppendStructuredBuffer<uint> _VisibleClusterWrite; // *
+StructuredBuffer<uint> _VisibleClusterRead; // *
+RWStructuredBuffer<uint> _ClusterCounter; // *
+RWStructuredBuffer<uint> _DispatchArgs; // *
+
+StructuredBuffer<Meshlet> _Meshlets;
+StructuredBuffer<MeshletBound> _MeshletBounds;
+AppendStructuredBuffer<VisibleInfo> _VisibleMeshletWrite;
+RWStructuredBuffer<uint> _IndexCounter;
+
+cbuffer CB0 : register(b0)
+{
+    float4x4 _ObjectToWorld;
+    float4 _FrustumPlanes[6];
+    float3 _CameraPosition;
+    float _ObjectScale;
+    uint _MeshletCount;
+    uint _RootCount; // *
+    uint _MaxDepth; // *
+};
+
+#ifndef UNITY_DEVICE_SUPPORTS_WAVE_ANY
+groupshared uint gGroupBase;
+groupshared uint gGroupCounter;
+#endif
+
+bool SphereCulling(float3 center, float radius)
+{
+    [unroll] for (int i = 0; i < 6; i++)
+    {
+        float4 plane = _FrustumPlanes[i];
+        float dist = dot(center, plane.xyz) + plane.w;
+        if (dist < -radius)
+            return false;
+    }
+    return true;
+}
+
+bool ConeCulling(float3 coneApex, float3 coneAxis, float coneCutoff)
+{
+    if (dot(normalize(coneApex - _CameraPosition), coneAxis) >= coneCutoff)
+        return false;
+    return true;
+}
+
+[numthreads(CULLING_THREADS, 1, 1)]
+void CSCullCluster(uint3 id : SV_DispatchThreadID, uint gid : SV_GroupIndex)
+{
+    uint globalID = id.x;
+    ClusterNode node;
+    bool shouldProcess;
+    uint depth = _DepthCounter[0];
+    if (depth == 0)
+    {
+        // rootのときは、ClusterNodeから直接取得
+        shouldProcess = globalID < _RootCount;
+        if(shouldProcess)
+            node = _ClusterNodes[globalID];
+    }
+    else
+    {
+        // internal nodeのときは、可視クラスターから取得
+        shouldProcess = globalID < _ClusterCounter[depth-1];
+        if(shouldProcess)
+        {
+            uint clusterID = _VisibleClusterRead[globalID];
+            node = _ClusterNodes[clusterID];
+        }
+    }
+
+    if (shouldProcess)
+    {
+        // カリング
+        float3 center = node.center;
+        float3 centerWS = mul(_ObjectToWorld, float4(center, 1.0)).xyz;
+        float radius = node.radius * _ObjectScale;
+        bool visible = SphereCulling(centerWS, radius);
+        if (!SphereCulling(centerWS, radius))
+            return;
+
+        // 可視クラスターの数をカウント
+        #if UNITY_DEVICE_SUPPORTS_WAVE_ANY
+        if(!visible)
+            return;
+        uint totalCount = WaveActiveSum(node.count);
+        if (WaveIsFirstLane())
+            InterlockedAdd(_ClusterCounter[depth], totalCount);
+        #else
+        if(gid.x == 0)
+            gGroupCounter = 0;
+        GroupMemoryBarrierWithGroupSync();
+        
+        if(visible)
+            InterlockedAdd(gGroupCounter, node.count);
+        GroupMemoryBarrierWithGroupSync();
+
+        if(gid.x == 0)
+            InterlockedAdd(_ClusterCounter[depth], gGroupCounter);
+        #endif
+
+        // 可視クラスターの子を書き込む
+        for (uint i = 0; i < node.count; ++i)
+        {
+            _VisibleClusterWrite.Append(node.firstIndex + i);
+        }
+    }    
+}
+
+[numthreads(1, 1, 1)]
+void CSPrepareCluster(uint3 id : SV_DispatchThreadID)
+{
+    uint curDepth = _DepthCounter[0];
+    uint visibleCount = _ClusterCounter[curDepth];
+    _DispatchArgs[0] = (visibleCount + CULLING_THREADS - 1) / CULLING_THREADS;
+    _DispatchArgs[1] = 1;
+    _DispatchArgs[2] = 1;
+    
+    _DepthCounter[0] = curDepth + 1; // 深さを加算
+}
+
+#if UNITY_DEVICE_SUPPORTS_WAVE_ANY
+void AppendVisibleInfo_Wave(bool visible, uint meshletID)
+{
+    if (!visible)
+        return;
+
+    Meshlet meshlet = _Meshlets[meshletID];
+    uint triangleCount = meshlet.triangleCount;
+    uint indexCount = triangleCount * 3;
+    
+    uint waveTotalIndexCount = WaveActiveSum(indexCount); // wave内の総インデックス数
+    uint waveBase = 0;
+    if (WaveIsFirstLane())
+        InterlockedAdd(_IndexCounter[0], waveTotalIndexCount, waveBase);
+    waveBase = WaveReadLaneFirst(waveBase); // wave baseを全レーンにブロードキャスト
+    uint prefixSum = WavePrefixSum(indexCount);
+    uint idxBase = waveBase + prefixSum;
+
+    VisibleInfo info = { meshletID, idxBase, triangleCount, 0 };
+    _VisibleMeshletWrite.Append(info);
+}
+#else // UNITY_DEVICE_SUPPORTS_WAVE_ANY
+void AppendVisibleInfo_LDS(bool visible, uint meshletID, uint gid)
+{
+    if (gid.x == 0)
+        gGroupCounter = 0;
+    GroupMemoryBarrierWithGroupSync();
+
+    uint prefixSum = 0;
+    if (visible)
+    {
+        Meshlet meshlet = _Meshlets[meshletID];
+        uint triangleCount = meshlet.triangleCount;
+        uint indexCount = triangleCount * 3;
+        
+        InterlockedAdd(gGroupCounter, indexCount, prefixSum);
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    if (gid.x == 0)
+    {
+        uint tmp;
+        InterlockedAdd(_IndexCounter[0], gGroupCounter, tmp);
+        gGroupBase = tmp;
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    uint idxBase = gGroupBase + prefixSum;
+
+    if (visible)
+    {
+        Meshlet meshlet = _Meshlets[meshletID];
+        uint triangleCount = meshlet.triangleCount;
+        VisibleInfo info = { meshletID, idxBase, triangleCount, 0 };
+        _VisibleMeshletWrite.Append(info);
+    }
+}
+#endif // UNITY_DEVICE_SUPPORTS_WAVE_ANY
+
+[numthreads(CULLING_THREADS, 1, 1)]
+void CSCullMeshlet (uint3 id : SV_DispatchThreadID, uint gid : SV_GroupIndex )
+{
+    uint meshletID;
+    bool shouldProcess = false;
+    #if ENABLE_HIERARCHY_CULLING
+    uint visibleMehletID = id.x;
+    shouldProcess = visibleMehletID < _ClusterCounter[_MaxDepth];
+    if(shouldProcess)
+        meshletID = _VisibleClusterRead[visibleMehletID];
+    #else
+    meshletID = id.x;
+    shouldProcess = meshletID < _MeshletCount;
+    #endif
+
+    if(shouldProcess)
+    {
+        MeshletBound meshletBound = _MeshletBounds[meshletID];
+        float3 center = meshletBound.center;
+        float radius = meshletBound.radius * _ObjectScale;
+        float3 centerWS = mul(_ObjectToWorld, float4(center, 1.0)).xyz;
+    
+        bool visible = ConeCulling(meshletBound.coneApex, meshletBound.coneAxis, meshletBound.coneCutoff) &&
+                       SphereCulling(centerWS.xyz, radius);
+    
+        #if UNITY_DEVICE_SUPPORTS_WAVE_ANY
+        AppendVisibleInfo_Wave(visible, meshletID);
+        #else
+        AppendVisibleInfo_LDS(visible, meshletID, gid);
+        #endif
+    }
+}
+

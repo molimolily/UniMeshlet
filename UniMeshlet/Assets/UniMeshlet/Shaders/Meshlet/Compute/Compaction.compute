@@ -1,0 +1,138 @@
+#pragma kernel CSCompaction
+#pragma use_dxc
+#pragma require Native16Bit
+#pragma multi_compile_local _ USE_16_BIT_INDICES
+
+struct Meshlet
+{
+    uint vertexOffset;
+    uint triangleOffset;
+    uint vertexCount;
+    uint triangleCount;
+};
+
+
+struct VisibleInfo
+{
+    uint meshletID;
+    uint baseIndex;
+    uint triangleCount;
+    uint padding;
+};
+
+struct DrawArgs
+{
+    uint indexCount;
+    uint instanceCount;
+    uint startIndex;
+    uint baseVertex;
+    uint startInstance;
+};
+
+// Meshlet
+StructuredBuffer<Meshlet> _Meshlets;
+RWStructuredBuffer<uint> _IndexCounter;
+
+#ifdef USE_16_BIT_INDICES
+RWStructuredBuffer<uint16_t> _Indices;
+#else
+RWStructuredBuffer<int> _Indices;
+#endif
+RWByteAddressBuffer _MeshletIndexTable;
+RWStructuredBuffer<DrawArgs> _DrawArgs;
+StructuredBuffer<uint> _MeshletVertices;
+ByteAddressBuffer _MeshletTriangles;
+StructuredBuffer<VisibleInfo> _VisibleMeshlets;
+
+cbuffer CB0 : register(b0)
+{
+    uint _TableStride; // 1, 2, 4 byte
+};
+
+
+inline uint ReadU8(ByteAddressBuffer buf, uint byteAddr)
+{
+    uint word = buf.Load(byteAddr & ~3);             // 32bit 読み
+    return (word >> ((byteAddr & 3) * 8)) & 0xff;    // 必要バイトだけ抽出
+}
+
+inline void WriteMeshletID(uint primID, uint meshletID)
+{
+    uint byteAddr = primID * _TableStride;
+
+    // 32 bit stride: 競合なし → そのまま書く
+    if (_TableStride == 4)
+    {
+        _MeshletIndexTable.Store(byteAddr, meshletID);
+        return;
+    }
+
+    // ------- 8 / 16 bit -------  (ここから先は前回と同じ) --------
+    uint  wordAddr = byteAddr & ~3;
+    uint  mask     = (_TableStride == 2) ? 0xffff : 0xff;
+    uint  shift    = (_TableStride == 2) ? ((byteAddr & 2) * 8)
+                                         : ((byteAddr & 3) * 8);
+
+    uint oldVal, prev;
+    do
+    {
+        oldVal = _MeshletIndexTable.Load(wordAddr);
+        uint newVal = (oldVal & ~(mask << shift)) |
+            ((meshletID & mask) << shift);
+
+        _MeshletIndexTable.InterlockedCompareExchange(
+            wordAddr,         // 4-byte aligned offset
+            oldVal,           // compare
+            newVal,           // value
+            prev);            // out original
+
+    } while (prev != oldVal);
+}
+
+[numthreads(32, 1, 1)]
+void CSCompaction(uint3 gID : SV_GroupID,
+             uint3 tID :  SV_GroupThreadID )
+{
+    uint vIdx = gID.x;
+    VisibleInfo vi = _VisibleMeshlets[vIdx];
+
+    Meshlet meshlet = _Meshlets[vi.meshletID];
+    uint triangleCount = vi.triangleCount;
+    uint baseIndex = vi.baseIndex;
+
+    for (uint tri = tID.x; tri < triangleCount; tri += 32)
+    {
+        uint baseByte = meshlet.triangleOffset + tri * 3;
+        uint t0 = ReadU8(_MeshletTriangles, baseByte + 0);
+        uint t1 = ReadU8(_MeshletTriangles, baseByte + 1);
+        uint t2 = ReadU8(_MeshletTriangles, baseByte + 2);
+
+        #ifdef USE_16_BIT_INDICES
+        uint16_t v0 = _MeshletVertices[meshlet.vertexOffset + t0];
+        uint16_t v1 = _MeshletVertices[meshlet.vertexOffset + t1];
+        uint16_t v2 = _MeshletVertices[meshlet.vertexOffset + t2];
+        #else
+        uint v0 = _MeshletVertices[meshlet.vertexOffset + t0];
+        uint v1 = _MeshletVertices[meshlet.vertexOffset + t1];
+        uint v2 = _MeshletVertices[meshlet.vertexOffset + t2];
+        #endif
+
+        uint dst = baseIndex + tri * 3;
+        _Indices[dst + 0] = v0;
+        _Indices[dst + 1] = v1;
+        _Indices[dst + 2] = v2;
+
+        uint primID = baseIndex / 3 + tri;
+        WriteMeshletID(primID, vi.meshletID);
+    }
+
+    if (tID.x == 0)
+        if (gID.x == 0)
+        {
+            _DrawArgs[0].indexCount = _IndexCounter[0];
+            _DrawArgs[0].instanceCount = 1;
+            _DrawArgs[0].startIndex = 0;
+            _DrawArgs[0].baseVertex = 0;
+            _DrawArgs[0].startInstance = 0;
+        }
+}
