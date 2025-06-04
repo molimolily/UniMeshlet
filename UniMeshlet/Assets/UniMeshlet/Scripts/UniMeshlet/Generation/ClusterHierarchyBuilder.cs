@@ -2,27 +2,12 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
+using UniMeshlet.Common;
 using Unity.Collections;
 using UnityEngine;
 
-namespace UniMeshlet
+namespace UniMeshlet.Generation
 {
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct ClusterNode
-    {
-        public Vector3 Center;
-        public float Radius;
-        public uint FirstIndex;
-        public uint Count;
-    }
-    
-    [Serializable]
-    public struct HierarchyInfo
-    {
-        public int FirstIndex;
-        public int Count;
-    }
-    
     public static class ClusterHierarchyBuilder
     {
         private const int MaxDepth = 10;

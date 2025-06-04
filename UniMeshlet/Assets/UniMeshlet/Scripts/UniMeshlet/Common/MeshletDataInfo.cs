@@ -2,7 +2,7 @@
 using UnityEngine;
 using UnityEngine.Rendering;
 
-namespace UniMeshlet
+namespace UniMeshlet.Common
 {
     public class MeshletDataInfo : ScriptableObject
     {

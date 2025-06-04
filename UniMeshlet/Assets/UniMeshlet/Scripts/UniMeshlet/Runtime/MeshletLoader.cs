@@ -1,12 +1,13 @@
 ﻿using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using UniMeshlet.Common;
 using Unity.Collections;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-namespace UniMeshlet
+namespace UniMeshlet.Runtime
 {
     public static class MeshletLoader
     {

@@ -1,6 +1,6 @@
 ﻿using UnityEngine;
 
-namespace UniMeshlet.Util
+namespace UniMeshlet.Runtime.Util
 {
     public static class FrustumUtil
     {

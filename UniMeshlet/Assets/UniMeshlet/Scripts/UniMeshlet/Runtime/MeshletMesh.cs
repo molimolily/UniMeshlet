@@ -1,8 +1,9 @@
 ﻿using System;
 using System.Runtime.InteropServices;
+using UniMeshlet.Common;
 using UnityEngine;
 
-namespace UniMeshlet
+namespace UniMeshlet.Runtime
 {
     public class MeshletMesh :IDisposable
     {

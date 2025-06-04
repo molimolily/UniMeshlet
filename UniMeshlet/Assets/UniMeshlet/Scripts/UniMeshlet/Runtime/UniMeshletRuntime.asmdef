@@ -1,0 +1,16 @@
+{
+    "name": "UniMeshletRuntime",
+    "rootNamespace": "",
+    "references": [
+        "GUID:d8a00ba69f5daa74e8df8ee15c7770a6"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

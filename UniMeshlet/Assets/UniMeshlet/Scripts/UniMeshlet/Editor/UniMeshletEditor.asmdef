@@ -1,0 +1,19 @@
+{
+    "name": "UniMeshletEditor",
+    "rootNamespace": "",
+    "references": [
+        "GUID:d8a00ba69f5daa74e8df8ee15c7770a6",
+        "GUID:f8f5beffba2c1864aa17cada1c283ba7"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

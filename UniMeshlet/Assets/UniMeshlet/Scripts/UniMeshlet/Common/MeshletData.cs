@@ -5,7 +5,7 @@ using Unity.Collections;
 using UnityEngine;
 using Object = UnityEngine.Object;
 
-namespace UniMeshlet
+namespace UniMeshlet.Common
 {
     [StructLayout(LayoutKind.Sequential)]
     public struct Vertex

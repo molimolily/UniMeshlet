@@ -2,7 +2,7 @@
 using UnityEngine;
 using UnityEngine.Rendering;
 
-namespace UniMeshlet
+namespace UniMeshlet.Runtime
 {
     public class CompactionPass : IDisposable
     {

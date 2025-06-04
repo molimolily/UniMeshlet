@@ -1,9 +1,9 @@
 ﻿using System;
-using UniMeshlet.Util;
+using UniMeshlet.Runtime.Util;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-namespace UniMeshlet
+namespace UniMeshlet.Runtime
 {
     public class CullingPass : IDisposable
     {

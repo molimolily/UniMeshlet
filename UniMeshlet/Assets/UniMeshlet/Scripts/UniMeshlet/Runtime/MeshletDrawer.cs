@@ -1,9 +1,10 @@
 ﻿#define HIERARCHY_CULLING_DEBUG
 
 using System.Linq;
+using UniMeshlet.Common;
 using UnityEngine;
 
-namespace UniMeshlet
+namespace UniMeshlet.Runtime
 {
     public class MeshletDrawer : MonoBehaviour
     {

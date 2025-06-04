@@ -1,11 +1,12 @@
 ﻿using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using UniMeshlet.Common;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-namespace UniMeshlet
+namespace UniMeshlet.Generation
 {
     public static class MeshletProcessor
     {

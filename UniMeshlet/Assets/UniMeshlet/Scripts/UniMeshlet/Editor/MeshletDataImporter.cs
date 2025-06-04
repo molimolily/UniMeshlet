@@ -1,5 +1,7 @@
 ﻿using System.Collections.Generic;
 using System.IO;
+using UniMeshlet.Common;
+using UniMeshlet.Generation;
 using UnityEditor;
 using UnityEditor.AssetImporters;
 using UnityEngine;
