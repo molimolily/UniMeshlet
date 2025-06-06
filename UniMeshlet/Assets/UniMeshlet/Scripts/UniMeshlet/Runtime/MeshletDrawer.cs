@@ -3,6 +3,7 @@
 using System.Linq;
 using UniMeshlet.Common;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace UniMeshlet.Runtime
 {
@@ -27,6 +28,8 @@ namespace UniMeshlet.Runtime
         private GraphicsBuffer _drawArgsBuffer;
         private CullingPass _cullingPass;
         private CompactionPass _compactionPass;
+
+        private CommandBuffer _cmd;
         
         private GraphicsBuffer.IndirectDrawIndexedArgs DrawArgs(int indexCount)
         {
@@ -49,6 +52,8 @@ namespace UniMeshlet.Runtime
             var args = new[] { DrawArgs(0) };
             _drawArgsBuffer.SetData(args);
             
+            _cmd ??= new CommandBuffer { name = "MeshletDrawer Command Buffer" };
+            
             _cullingPass = new CullingPass(cullCompute, _meshletMesh);
             _compactionPass = new CompactionPass(compactionCompute);
             
@@ -59,6 +64,8 @@ namespace UniMeshlet.Runtime
         {
             _compactionPass?.Dispose();
             _cullingPass?.Dispose();
+            _cmd?.Dispose();
+            _cmd = null;
             _drawArgsBuffer?.Dispose();
             _drawArgsBuffer = null;
             _meshletMesh?.Dispose();
@@ -87,14 +94,14 @@ namespace UniMeshlet.Runtime
             var meshletData = _meshletMesh.GetMeshletData;
             
             // Initialize DrawArgsBuffer
-            _drawArgsBuffer.SetData(cullingEnabled
+            _cmd.SetBufferData(_drawArgsBuffer,cullingEnabled
                 ? new[] { DrawArgs(0) }
                 : new[] { DrawArgs(_meshletMesh.IndexBuffer.count) });
 
             if (cullingEnabled)
             {
-                _cullingPass.Execute(_meshletMesh, cullingCamera, this.transform);
-                _compactionPass.Execute(_meshletMesh, _cullingPass.VisibleMeshletBuffer,
+                _cullingPass.AddCommands(_cmd, _meshletMesh, cullingCamera, this.transform);
+                _compactionPass.AddCommands(_cmd, _meshletMesh, _cullingPass.VisibleMeshletBuffer,
                 _cullingPass.IndexCounterBuffer, _cullingPass.DispatchArgsBuffer,
                     _drawArgsBuffer);
 
@@ -111,6 +118,9 @@ namespace UniMeshlet.Runtime
                 }
                 #endif
             }
+            
+            Graphics.ExecuteCommandBuffer(_cmd);
+            _cmd.Clear();
 
             //  Set the material properties
             _matProps.Clear();

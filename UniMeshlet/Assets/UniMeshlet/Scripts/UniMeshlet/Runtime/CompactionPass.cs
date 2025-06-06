@@ -50,6 +50,25 @@ namespace UniMeshlet.Runtime
             
         }
         
+        public void AddCommands(CommandBuffer cmd, MeshletMesh meshletMesh, GraphicsBuffer visibleMeshletBuffer, GraphicsBuffer indexCounterBuffer,
+            GraphicsBuffer dispatchArgsBuffer, GraphicsBuffer drawArgsBuffer)
+        {
+            var meshletData = meshletMesh.GetMeshletData;
+            cmd.SetComputeBufferParam(_compactionShader, _kernel, IndexBufferID, meshletMesh.IndexBuffer);
+            cmd.SetComputeBufferParam(_compactionShader, _kernel, MeshletBufferID, meshletMesh.MeshletBuffer);
+            cmd.SetComputeBufferParam(_compactionShader, _kernel, MeshletVertexBufferID, meshletMesh.MeshletVertexBuffer);
+            cmd.SetComputeBufferParam(_compactionShader, _kernel, MeshletTriangleBufferID, meshletMesh.MeshletTriangleBuffer);
+            cmd.SetComputeBufferParam(_compactionShader, _kernel, MeshletIndexTableBufferID, meshletMesh.MeshletIndexTableBuffer);
+            cmd.SetComputeBufferParam(_compactionShader, _kernel, VisibleInfoReadBufferID, visibleMeshletBuffer);
+            cmd.SetComputeBufferParam(_compactionShader, _kernel, IndexCounterID, indexCounterBuffer);
+            cmd.SetComputeBufferParam(_compactionShader, _kernel, DrawArgsBufferID, drawArgsBuffer);
+            cmd.SetComputeIntParam(_compactionShader, TableStrideID, (int)meshletData.TableFormat);
+            cmd.SetKeyword(_compactionShader, _use16BitIndices, meshletData.BakedMesh.indexFormat == IndexFormat.UInt16);
+            cmd.CopyCounterValue(visibleMeshletBuffer, dispatchArgsBuffer, 0);
+            cmd.DispatchCompute(_compactionShader, _kernel, dispatchArgsBuffer, 0);
+            
+        }
+        
         public void Dispose()
         {
         }

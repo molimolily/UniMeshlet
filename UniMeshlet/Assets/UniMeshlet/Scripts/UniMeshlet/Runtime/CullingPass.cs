@@ -179,6 +179,91 @@ namespace UniMeshlet.Runtime
             _cullShader.DispatchIndirect(_meshletCullKernel, _dispatchArgsBuffer);
         }
         
+        public void AddCommands(CommandBuffer cmd, MeshletMesh meshletMesh, Camera camera, Transform meshTransform)
+        {
+            var objectToWorld = meshTransform.localToWorldMatrix;
+            var viewMat = camera.worldToCameraMatrix;
+            var projMat = GL.GetGPUProjectionMatrix(camera.projectionMatrix, true);
+            var vpMat = projMat * viewMat;
+            FrustumUtil.ExtractPlanes(vpMat, _frustumPlanes, SystemInfo.usesReversedZBuffer);
+            var camPosOS = meshTransform.InverseTransformPoint(camera.transform.position);
+            var objectScale = Mathf.Max(meshTransform.lossyScale.x, meshTransform.lossyScale.y, meshTransform.lossyScale.z);
+            var meshletData = meshletMesh.GetMeshletData;
+            var rootCount = meshletData.HasHierarchy ? meshletData.HierarchyInfo[0].Count : 0;
+            var maxDepth = meshletData.HasHierarchy ? meshletData.HierarchyInfo.Count - 1: 0;
+            
+            // Set CBuffer
+            cmd.SetComputeMatrixParam(_cullShader, ObjectToWorldID, objectToWorld);
+            cmd.SetComputeVectorArrayParam(_cullShader, FrustumPlanesBufferID, _frustumPlanes);
+            cmd.SetComputeVectorParam(_cullShader, CameraPositionID, camPosOS);
+            cmd.SetComputeFloatParam(_cullShader, ObjectScaleID, objectScale);
+            cmd.SetComputeIntParam(_cullShader, MeshletCountID, meshletMesh.MeshletBuffer.count);
+            cmd.SetComputeIntParam(_cullShader, RootCountID, rootCount);
+            cmd.SetComputeIntParam(_cullShader, MaxDepthID, maxDepth);
+            
+            var argX = (uint)Mathf.CeilToInt(meshletMesh.MeshletBuffer.count / (float)_meshletCullThreadGroupSizeX);
+            
+            cmd.SetKeyword(_cullShader, _enableHierarchyCulling, meshletData.HasHierarchy);
+            // Hierarchical cluster culling
+            if (meshletData.HasHierarchy)
+            {
+                cmd.SetBufferData(_depthCounterBuffer, new uint[] { 0 });
+                cmd.SetBufferData(_clusterCounterBuffer, new uint[maxDepth + 1]);
+                
+                argX = (uint)Mathf.CeilToInt(rootCount / (float)_clusterCullThreadGroupSizeX);
+                cmd.SetBufferData(_dispatchArgsBuffer, new uint[] { argX, 1, 1 });
+                
+                cmd.SetComputeBufferParam(_cullShader, _clusterCullKernel, ClusterNodesBufferID, meshletMesh.ClusterNodeBuffer);
+                cmd.SetComputeBufferParam(_cullShader, _clusterCullKernel, DepthCounterBufferID, _depthCounterBuffer);
+                cmd.SetComputeBufferParam(_cullShader, _clusterCullKernel, ClusterCounterBufferID, _clusterCounterBuffer);
+                
+                cmd.SetComputeBufferParam(_cullShader, _prepareClusterKernel, DepthCounterBufferID, _depthCounterBuffer);
+                cmd.SetComputeBufferParam(_cullShader, _prepareClusterKernel, ClusterCounterBufferID, _clusterCounterBuffer);
+                cmd.SetComputeBufferParam(_cullShader, _prepareClusterKernel, DispatchArgsBufferID, _dispatchArgsBuffer);
+                
+                bool writeToA = true;
+                for (int i = 0; i < maxDepth + 1; i++)
+                {
+                    if (writeToA)
+                    {
+                        cmd.SetBufferCounterValue(_visibleClusterBufferA, 0);
+                        cmd.SetComputeBufferParam(_cullShader, _clusterCullKernel, VisibleClusterWriteBufferID, _visibleClusterBufferA);
+                        cmd.SetComputeBufferParam(_cullShader, _clusterCullKernel, VisibleClusterReadBufferID, _visibleClusterBufferB);
+                    }
+                    else
+                    {
+                        cmd.SetBufferCounterValue(_visibleClusterBufferB, 0);
+                        cmd.SetComputeBufferParam(_cullShader, _clusterCullKernel, VisibleClusterWriteBufferID, _visibleClusterBufferB);
+                        cmd.SetComputeBufferParam(_cullShader, _clusterCullKernel, VisibleClusterReadBufferID, _visibleClusterBufferA);
+                    }
+                    
+                    cmd.DispatchCompute(_cullShader, _clusterCullKernel, _dispatchArgsBuffer, 0);
+                    cmd.DispatchCompute(_cullShader, _prepareClusterKernel, 1, 1, 1);
+                    
+                    writeToA = !writeToA;
+                }
+                
+                cmd.SetComputeBufferParam(_cullShader, _meshletCullKernel, VisibleClusterReadBufferID,
+                    writeToA ? _visibleClusterBufferB : _visibleClusterBufferA);
+                cmd.SetComputeBufferParam(_cullShader, _meshletCullKernel, ClusterCounterBufferID, _clusterCounterBuffer);
+            }
+            else
+            {
+                cmd.SetBufferData(_dispatchArgsBuffer, new uint[] { argX, 1, 1 });
+            }
+            
+            // Meshlet culling
+            cmd.SetBufferCounterValue(_visibleMeshletBuffer, 0);
+            cmd.SetBufferData(_indexCounterBuffer, new uint[] { 0 });
+            
+            cmd.SetComputeBufferParam(_cullShader, _meshletCullKernel, MeshletBufferID, meshletMesh.MeshletBuffer);
+            cmd.SetComputeBufferParam(_cullShader, _meshletCullKernel, MeshletBoundBufferID, meshletMesh.MeshletBoundBuffer);
+            cmd.SetComputeBufferParam(_cullShader, _meshletCullKernel, VisibleMeshletBufferID, _visibleMeshletBuffer);
+            cmd.SetComputeBufferParam(_cullShader, _meshletCullKernel, IndexCounterBufferID, _indexCounterBuffer);
+            
+            cmd.DispatchCompute(_cullShader, _meshletCullKernel, _dispatchArgsBuffer, 0);
+        }
+        
         public void Dispose()
         {
             _dispatchArgsBuffer.Dispose();
